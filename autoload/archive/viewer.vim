@@ -1,7 +1,7 @@
 " Author:  Eric Van Dewoestine
 "
 " License: {{{
-"   Copyright (c) 2005 - 2010, Eric Van Dewoestine
+"   Copyright (c) 2005 - 2011, Eric Van Dewoestine
 "   All rights reserved.
 "
 "   Redistribution and use of this software in source and binary forms, with
@@ -129,7 +129,7 @@ function! archive#viewer#ReadFile()
   if string(file) != '0'
     let bufnum = bufnr('%')
     silent exec 'keepjumps edit! ' . escape(file, ' ')
-    exec 'bdelete ' . bufnum
+    silent exec 'bdelete ' . bufnum
 
     " alternate solution, that keeps the archive url as the buffer's filename,
     " but prevents taglist from being able to parse tags.
@@ -196,37 +196,47 @@ endfunction " }}}
 
 " ExecuteAction(file, command) {{{
 function! archive#viewer#ExecuteAction(file, command)
+  let viewer_buf = bufnr('%')
+
   let command = a:command
   if command == 'edit'
-    if !exists('b:archive_edit_window') ||
-     \ getwinvar(b:archive_edit_window, 'archive_edit_window') == ''
-      let bufnr = bufnr('%')
-      new
-      let w:archive_edit_window = 1
-      call setbufvar(bufnr, 'archive_edit_window', winnr())
-    else
-      exec b:archive_edit_window . 'winc w'
-    endif
+    " find the nearest archive window
+    let edit_window = 0
+    let step = &splitbelow ? 1 : -1
+    let next = winnr() + step
+    while next > 0 && next <= winnr('$')
+      if getwinvar(next, 'archive_window') != ''
+        let edit_window = next
+        break
+      endif
+      let next += step
+    endwhile
+
+    exec edit_window ? edit_window . 'winc w' : 'new'
   endif
 
-  if exists('b:archive_edit_window') &&
-   \ getwinvar(b:archive_edit_window, 'archive_edit_window') == 1
-    exec b:archive_edit_window . 'winc w'
-  endif
-
-  " windows may throw a Permission Denied error attempting to split using the
-  " archive file name, but opening the window and then editing the file works
-  if (has('win32') || has('win64')) && command =~ 'split'
+  " Windows may throw a Permission Denied error attempting to split using the
+  " archive file name, but opening the window and then editing the file works.
+  " Also, vim on windows manages to screw up the path opening a new tab if the
+  " path has any spaces.
+  if (has('win32') || has('win64')) && command != 'edit'
     exec substitute(command, 'split', 'new', 'g')
     let command = 'silent edit'
   endif
 
   try
-    noautocmd exec command . ' ' . escape(a:file, ' ')
+    noautocmd silent exec command . ' ' . escape(a:file, ' ')
   catch /E303/
     " ignore error to create swap file (seems to only be an issue on windows)
   endtry
+
   call archive#viewer#ReadFile()
+  let w:archive_window = 1
+
+  " partial fix to avoid silly press enter prompt on windows.
+  if has('win32') || has('win64')
+    redraw!
+  endif
 endfunction " }}}
 
 " ExpandDir() {{{
@@ -236,7 +246,7 @@ function! archive#viewer#ExpandDir()
     let path = s:Cygpath(path, 'windows')
   endif
   let dir = b:file_info[getline('.')].url
-  if dir !~ path . '$' && s:IsArchive(dir)
+  if dir !~ '\M' . path . '$' && s:IsArchive(dir)
     let dir = s:FileUrl(dir) . '!/'
   endif
   let command = s:command_list
@@ -362,6 +372,10 @@ endfunction " }}}
 
 " s:OpenFile(action) " {{{
 function! s:OpenFile(action)
+  if getline('.') =~ '/$'
+    return
+  endif
+
   let path = s:GetFilePath()
   call archive#viewer#ExecuteAction(path, a:action)
 endfunction " }}}
